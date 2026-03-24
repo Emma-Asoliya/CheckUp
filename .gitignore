@@ -1,0 +1,13 @@
+data/
+*.wav
+*.zip
+
+*.h5
+*.pkl
+
+__pycache__/
+*.pyc
+.env
+venv/
+
+.vscode/

@@ -1,8 +1,8 @@
 """
-main_docker.py — CheckUp FastAPI Backend (TFLite version)
-==========================================================
-Uses TFLite instead of full TensorFlow to run on Render's free tier.
-TFLite model is 3.4MB vs 40.5MB — fits easily in 512MB RAM.
+main_docker.py — CheckUp FastAPI Backend
+==========================================
+Uses tensorflow-cpu with the original .h5 model.
+Railway has enough RAM to load the full model.
 
 Endpoints:
   GET  /         — serves index.html (the frontend UI)
@@ -17,22 +17,16 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+import tensorflow as tf
 import numpy as np
 import librosa
 import io
 import os
 from datetime import datetime
 
-# ── TFLite Runtime ────────────────────────────────────────────────────────────
-# Try tflite-runtime first (lightweight, for deployment).
-# Fall back to tensorflow.lite if running locally with full TensorFlow installed.
-try:
-    import tflite_runtime.interpreter as tflite
-    print("Using tflite-runtime")
-except ImportError:
-    import tensorflow as tf
-    tflite = tf.lite
-    print("Using tensorflow.lite (fallback)")
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from retrain import run_retraining
 
 # ── App Setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -60,26 +54,14 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # ── Serve Frontend ────────────────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
-# ── Load TFLite Model ─────────────────────────────────────────────────────────
-# TFLite uses an Interpreter instead of model.predict()
-# We load it once at startup and reuse it for every prediction request
-print("Loading TFLite model...")
-interpreter = tflite.Interpreter(
-    model_path=os.path.join(MODELS_DIR, 'checkup_model.tflite')
+# ── Load Model ────────────────────────────────────────────────────────────────
+# Loaded once at startup and reused for every prediction request
+print("Loading model...")
+model = tf.keras.models.load_model(
+    os.path.join(MODELS_DIR, 'checkup_model.h5')
 )
-interpreter.allocate_tensors()
-
-# Get input and output tensor details
-# These tell us the exact shape and index to use when running inference
-input_details  = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-
-print(f"Input shape:  {input_details[0]['shape']}")   # should be (1, 40, 174, 1)
-print(f"Output shape: {output_details[0]['shape']}")  # should be (1, 3)
-
-# Load scaler and label classes saved from the original training run
-mean          = np.load(os.path.join(MODELS_DIR, 'scaler_mean.npy'))
-std           = np.load(os.path.join(MODELS_DIR, 'scaler_std.npy'))
+mean = np.load(os.path.join(MODELS_DIR, 'scaler_mean.npy'))
+std  = np.load(os.path.join(MODELS_DIR, 'scaler_std.npy'))
 label_classes = np.load(
     os.path.join(MODELS_DIR, 'label_classes.npy'),
     allow_pickle=True
@@ -106,31 +88,6 @@ def extract_mfcc(audio_bytes, n_mfcc=40, max_len=174):
     return mfcc
 
 
-def run_tflite_inference(mfcc_scaled):
-    """
-    Runs inference using the TFLite interpreter.
-
-    Unlike model.predict(), TFLite requires:
-      1. Setting the input tensor manually
-      2. Calling invoke() to run the model
-      3. Reading the output tensor manually
-
-    Input must be float32 — TFLite is strict about dtypes.
-    """
-    # Set the input tensor — must be float32
-    interpreter.set_tensor(
-        input_details[0]['index'],
-        mfcc_scaled.astype(np.float32)
-    )
-
-    # Run inference
-    interpreter.invoke()
-
-    # Read the output tensor — shape (1, 3) softmax probabilities
-    output = interpreter.get_tensor(output_details[0]['index'])
-    return output
-
-
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -147,7 +104,7 @@ def health_check():
         "status":         "retraining" if _retraining_in_progress else "healthy",
         "uptime_seconds": uptime.seconds,
         "uptime_human":   str(uptime).split('.')[0],
-        "model_loaded":   interpreter is not None,
+        "model_loaded":   model is not None,
         "classes":        label_classes.tolist(),
         "model_accuracy": 0.8055,
         "roc_auc":        0.9254
@@ -158,7 +115,6 @@ def health_check():
 async def predict(file: UploadFile = File(...)):
     """
     Accepts a single .wav file and returns a workplace mental health prediction.
-    Uses TFLite interpreter instead of model.predict() for low memory usage.
     """
     if not file.filename.endswith('.wav'):
         raise HTTPException(
@@ -174,8 +130,8 @@ async def predict(file: UploadFile = File(...)):
         mfcc_flat   = mfcc.reshape(1, -1)
         mfcc_scaled = ((mfcc_flat - mean) / std).reshape(1, 40, 174, 1)
 
-        # Run TFLite inference
-        prediction      = run_tflite_inference(mfcc_scaled)
+        # Run prediction
+        prediction      = model.predict(mfcc_scaled, verbose=0)
         predicted_class = np.argmax(prediction[0])
         confidence      = float(prediction[0][predicted_class])
         label           = label_classes[predicted_class]
@@ -233,11 +189,9 @@ async def upload_files(files: list[UploadFile] = File(...)):
 @app.post("/retrain")
 async def retrain_model():
     """
-    Triggers fine-tuning on uploaded files.
-    Note: retraining still uses full TensorFlow (runs in the notebook/locally).
-    After retraining, convert the new .h5 to .tflite and redeploy.
+    Triggers fine-tuning of checkup_model.h5 on files in data/uploads/.
     """
-    global _retraining_in_progress
+    global model, _retraining_in_progress
 
     if _retraining_in_progress:
         raise HTTPException(
@@ -245,18 +199,19 @@ async def retrain_model():
             detail="A retraining job is already running. Please wait."
         )
 
-    # Import retrain here to avoid loading TF at startup
-    # (retrain.py uses full TensorFlow, not TFLite)
     _retraining_in_progress = True
 
     try:
-        import sys
-        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-        from retrain import run_retraining
         result = run_retraining()
 
+        # Reload updated weights immediately
+        model = tf.keras.models.load_model(
+            os.path.join(MODELS_DIR, 'checkup_model.h5')
+        )
+        print("Global model reloaded with fine-tuned weights.")
+
         return {
-            "message":        "Retraining complete. Redeploy to use updated model.",
+            "message":        "Retraining complete. Model updated successfully.",
             "files_used":     result["files_used"],
             "epochs":         result["epochs"],
             "final_accuracy": result["final_accuracy"]

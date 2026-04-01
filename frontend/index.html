@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>CheckUp — Workplace Mental Health Detection</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #0a0e0c;
+    --surface: #111714;
+    --surface2: #161d19;
+    --border: #1e2b24;
+    --border2: #243020;
+    --green: #00e676;
+    --green-dim: #00c85a;
+    --green-bg: #00e67610;
+    --green-bg2: #00e67620;
+    --amber: #ffb300;
+    --amber-bg: #ffb30010;
+    --blue: #40c4ff;
+    --blue-bg: #40c4ff10;
+    --red: #ff5252;
+    --red-bg: #ff525210;
+    --text: #e8f0ea;
+    --text2: #7a9b83;
+    --text3: #4a6b52;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── NAV ── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0 32px;
+    height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+
+  .logo {
+    font-size: 18px; font-weight: 600; letter-spacing: -0.5px;
+    color: var(--text);
+  }
+  .logo em { font-style: normal; color: var(--green); }
+
+  .nav-links { display: flex; gap: 2px; }
+
+  .nav-btn {
+    padding: 6px 16px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 400; font-family: 'DM Sans', sans-serif;
+    cursor: pointer; border: none; background: transparent;
+    color: var(--text2); transition: all 0.15s;
+  }
+  .nav-btn:hover { color: var(--text); background: var(--surface); }
+  .nav-btn.active { color: var(--green); background: var(--green-bg2); }
+
+  .status-pill {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 99px;
+    border: 1px solid var(--border2);
+    font-size: 12px; color: var(--text2);
+    font-family: 'DM Mono', monospace;
+  }
+  .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ── PAGES ── */
+  .page { display: none; padding: 88px 32px 40px; max-width: 1100px; margin: 0 auto; }
+  .page.active { display: block; animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ── TYPOGRAPHY ── */
+  .page-title {
+    font-size: 28px; font-weight: 600; letter-spacing: -0.5px;
+    color: var(--text); margin-bottom: 4px;
+  }
+  .page-sub { font-size: 14px; color: var(--text2); margin-bottom: 28px; }
+  .section-label {
+    font-size: 11px; font-weight: 500; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--text3);
+    margin-bottom: 12px; font-family: 'DM Mono', monospace;
+  }
+
+  /* ── CARDS ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+
+  /* ── DASHBOARD ── */
+  .metrics-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+  .metric-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 20px;
+  }
+  .metric-label { font-size: 11px; color: var(--text3); font-family: 'DM Mono', monospace; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .metric-val { font-size: 26px; font-weight: 600; color: var(--text); letter-spacing: -1px; }
+  .metric-val.green { color: var(--green); }
+  .metric-sub { font-size: 11px; color: var(--text3); margin-top: 4px; }
+
+  .viz-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px; }
+
+  .bar-item { margin-bottom: 10px; }
+  .bar-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .bar-name { font-size: 12px; color: var(--text2); }
+  .bar-num { font-size: 12px; color: var(--text3); font-family: 'DM Mono', monospace; }
+  .bar-track { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
+
+  /* ── PREDICT ── */
+  .predict-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .dropzone {
+    border: 1px dashed var(--border2); border-radius: var(--radius);
+    padding: 40px 24px; text-align: center;
+    transition: all 0.2s; cursor: pointer;
+    background: var(--surface);
+  }
+  .dropzone:hover, .dropzone.drag-over {
+    border-color: var(--green);
+    background: var(--green-bg);
+  }
+  .drop-icon {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: var(--green-bg2); display: flex;
+    align-items: center; justify-content: center;
+    margin: 0 auto 14px;
+  }
+  .drop-title { font-size: 15px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+  .drop-sub { font-size: 13px; color: var(--text2); margin-bottom: 16px; }
+
+  .btn {
+    padding: 9px 20px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500; font-family: 'DM Sans', sans-serif;
+    cursor: pointer; border: 1px solid var(--border2);
+    background: var(--surface2); color: var(--text);
+    transition: all 0.15s;
+  }
+  .btn:hover { border-color: var(--green); color: var(--green); }
+  .btn-primary {
+    background: var(--green); color: var(--bg);
+    border-color: var(--green);
+  }
+  .btn-primary:hover { background: var(--green-dim); border-color: var(--green-dim); color: var(--bg); }
+  .btn-lg { padding: 12px 28px; font-size: 14px; width: 100%; }
+
+  .result-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+  .result-empty { text-align: center; padding: 40px 0; color: var(--text3); font-size: 13px; }
+
+  .prediction-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 8px 18px; border-radius: 99px;
+    font-size: 15px; font-weight: 500; margin-bottom: 20px;
+  }
+  .badge-stressed { background: var(--red-bg); color: var(--red); border: 1px solid #ff525230; }
+  .badge-calm { background: var(--green-bg2); color: var(--green); border: 1px solid #00e67630; }
+  .badge-distressed { background: var(--blue-bg); color: var(--blue); border: 1px solid #40c4ff30; }
+
+  .conf-row { margin-bottom: 10px; }
+  .conf-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .conf-label { font-size: 12px; color: var(--text2); }
+  .conf-pct { font-size: 12px; font-family: 'DM Mono', monospace; color: var(--text3); }
+  .conf-track { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+  .conf-fill { height: 100%; border-radius: 2px; transition: width 0.6s ease; }
+
+  .result-message { font-size: 13px; color: var(--text2); margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); line-height: 1.6; }
+
+  /* ── RETRAIN ── */
+  .retrain-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .file-list { margin-top: 12px; }
+  .file-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-radius: var(--radius-sm);
+    background: var(--surface2); margin-bottom: 6px;
+    border: 1px solid var(--border);
+  }
+  .file-badge {
+    font-size: 10px; font-family: 'DM Mono', monospace;
+    padding: 2px 6px; border-radius: 4px;
+    background: var(--green-bg2); color: var(--green);
+  }
+  .file-name { font-size: 12px; color: var(--text2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-remove { font-size: 16px; color: var(--text3); cursor: pointer; transition: color 0.15s; }
+  .file-remove:hover { color: var(--red); }
+
+  .retrain-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; text-align: center; }
+  .retrain-panel h3 { font-size: 16px; font-weight: 500; margin-bottom: 8px; }
+  .retrain-panel p { font-size: 13px; color: var(--text2); margin-bottom: 20px; line-height: 1.6; }
+  .retrain-count { font-size: 28px; font-weight: 600; color: var(--green); margin-bottom: 4px; }
+  .retrain-count-label { font-size: 12px; color: var(--text3); margin-bottom: 20px; font-family: 'DM Mono', monospace; }
+
+  .progress-bar { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; margin: 12px 0; display: none; }
+  .progress-fill { height: 100%; background: var(--green); border-radius: 2px; width: 0%; transition: width 0.3s ease; }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    padding: 12px 20px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    transform: translateY(80px); opacity: 0;
+    transition: all 0.3s ease;
+    z-index: 999;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { border-color: #00e67630; color: var(--green); }
+  .toast.error { border-color: #ff525230; color: var(--red); }
+
+  /* ── ABOUT ── */
+  .about-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .about-text { font-size: 14px; color: var(--text2); line-height: 1.8; margin-bottom: 20px; }
+  .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .tag {
+    padding: 4px 12px; border-radius: 99px;
+    font-size: 12px; font-family: 'DM Mono', monospace;
+    border: 1px solid var(--border2); color: var(--text2);
+  }
+
+  /* ── UPTIME ── */
+  .uptime-row { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
+  .uptime-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 14px; border-radius: 99px;
+    border: 1px solid var(--border2);
+    font-size: 12px; color: var(--green);
+    font-family: 'DM Mono', monospace;
+  }
+
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--border2);
+    border-top-color: var(--green); border-radius: 50%;
+    animation: spin 0.8s linear infinite; display: none;
+    margin: 0 auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  input[type="file"] { display: none; }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">Check<em>Up</em></div>
+  <div class="nav-links">
+    <button class="nav-btn active" onclick="showPage('dashboard', this)">Dashboard</button>
+    <button class="nav-btn" onclick="showPage('predict', this)">Predict</button>
+    <button class="nav-btn" onclick="showPage('retrain', this)">Upload & Retrain</button>
+    <button class="nav-btn" onclick="showPage('about', this)">About</button>
+  </div>
+  <div class="status-pill">
+    <div class="status-dot"></div>
+    <span id="status-text">checking...</span>
+  </div>
+</nav>
+
+<!-- ── DASHBOARD ── -->
+<div id="dashboard" class="page active">
+  <div class="page-title">Dashboard</div>
+  <div class="page-sub">Model performance and dataset insights</div>
+
+  <div class="uptime-row">
+    <div class="uptime-badge">
+      <div class="status-dot"></div>
+      <span id="uptime-display">loading...</span>
+    </div>
+  </div>
+
+  <div class="section-label">Model metrics</div>
+  <div class="metrics-row">
+    <div class="metric-card">
+      <div class="metric-label">ACCURACY</div>
+      <div class="metric-val green" id="m-accuracy">—</div>
+      <div class="metric-sub">on test set</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">ROC-AUC</div>
+      <div class="metric-val green" id="m-roc">—</div>
+      <div class="metric-sub">class discrimination</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">F1 SCORE</div>
+      <div class="metric-val" id="m-f1">—</div>
+      <div class="metric-sub">weighted avg</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">TRAINING SAMPLES</div>
+      <div class="metric-val" id="m-samples">—</div>
+      <div class="metric-sub">after augmentation</div>
+    </div>
+  </div>
+
+  <div class="section-label">Dataset insights</div>
+  <div class="viz-row">
+    <div class="card">
+      <div class="section-label">Workplace distribution</div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Stressed</span><span class="bar-num">3,813</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:70%;background:#ff5252;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Calm</span><span class="bar-num">2,358</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:44%;background:#00e676;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Distressed</span><span class="bar-num">1,271</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:24%;background:#40c4ff;"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-label">Raw emotion distribution</div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Angry</span><span class="bar-num">1,271</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:80%;background:#ff5252;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Happy</span><span class="bar-num">1,271</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:80%;background:#00e676;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Neutral</span><span class="bar-num">1,087</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:68%;background:#888;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Sad</span><span class="bar-num">1,271</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:80%;background:#40c4ff;"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-label">Evaluation metrics</div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Accuracy</span><span class="bar-num">80.6%</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:80%;background:#00e676;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Precision</span><span class="bar-num">81.2%</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:81%;background:#00e676;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">Recall</span><span class="bar-num">80.6%</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:80%;background:#00e676;"></div></div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-header"><span class="bar-name">ROC-AUC</span><span class="bar-num">92.5%</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:92%;background:#ffb300;"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── PREDICT ── -->
+<div id="predict" class="page">
+  <div class="page-title">Predict</div>
+  <div class="page-sub">Upload a voice recording to detect workplace mental health state</div>
+
+  <div class="predict-grid">
+    <div>
+      <div class="section-label">Audio file</div>
+      <div class="dropzone" id="dropzone" onclick="document.getElementById('predict-file').click()"
+        ondragover="event.preventDefault();this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleDrop(event)">
+        <div class="drop-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00e676" stroke-width="2">
+            <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+          </svg>
+        </div>
+        <div class="drop-title" id="drop-title">Drop .wav file here</div>
+        <div class="drop-sub" id="drop-sub">or click to browse your files</div>
+        <button class="btn btn-primary" onclick="event.stopPropagation();document.getElementById('predict-file').click()">Choose file</button>
+      </div>
+      <input type="file" id="predict-file" accept=".wav" onchange="handleFileSelect(this)"/>
+
+      <div style="margin-top:12px;">
+        <button class="btn btn-primary btn-lg" onclick="runPrediction()" id="predict-btn" disabled>
+          Run prediction
+        </button>
+      </div>
+      <div class="spinner" id="predict-spinner" style="margin-top:16px;"></div>
+    </div>
+
+    <div>
+      <div class="section-label">Result</div>
+      <div class="result-card" id="result-card">
+        <div class="result-empty" id="result-empty">
+          Upload a .wav file and run prediction to see results here
+        </div>
+        <div id="result-content" style="display:none;">
+          <div class="section-label">Detected state</div>
+          <div class="prediction-badge" id="pred-badge">—</div>
+          <hr class="divider"/>
+          <div class="section-label">Confidence breakdown</div>
+          <div class="conf-row">
+            <div class="conf-header"><span class="conf-label">Stressed</span><span class="conf-pct" id="pct-stressed">0%</span></div>
+            <div class="conf-track"><div class="conf-fill" id="bar-stressed" style="width:0%;background:#ff5252;"></div></div>
+          </div>
+          <div class="conf-row">
+            <div class="conf-header"><span class="conf-label">Calm</span><span class="conf-pct" id="pct-calm">0%</span></div>
+            <div class="conf-track"><div class="conf-fill" id="bar-calm" style="width:0%;background:#00e676;"></div></div>
+          </div>
+          <div class="conf-row">
+            <div class="conf-header"><span class="conf-label">Distressed</span><span class="conf-pct" id="pct-distressed">0%</span></div>
+            <div class="conf-track"><div class="conf-fill" id="bar-distressed" style="width:0%;background:#40c4ff;"></div></div>
+          </div>
+          <div class="result-message" id="result-message"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── RETRAIN ── -->
+<div id="retrain" class="page">
+  <div class="page-title">Upload & Retrain</div>
+  <div class="page-sub">Upload new audio files and fine-tune the model</div>
+
+  <div class="retrain-grid">
+    <div>
+      <div class="section-label">Upload files</div>
+      <div class="dropzone" onclick="document.getElementById('retrain-files').click()"
+        ondragover="event.preventDefault();this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleRetrainDrop(event)">
+        <div class="drop-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00e676" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <div class="drop-title">Drop multiple .wav files</div>
+        <div class="drop-sub">Files must follow CREMA-D naming format</div>
+        <button class="btn btn-primary" onclick="event.stopPropagation();document.getElementById('retrain-files').click()">Choose files</button>
+      </div>
+      <input type="file" id="retrain-files" accept=".wav" multiple onchange="handleRetrainFiles(this)"/>
+
+      <div class="file-list" id="file-list"></div>
+
+      <div style="margin-top:12px;">
+        <button class="btn btn-primary btn-lg" onclick="uploadFiles()" id="upload-btn" disabled>
+          Upload files
+        </button>
+      </div>
+      <div class="spinner" id="upload-spinner" style="margin-top:12px;"></div>
+    </div>
+
+    <div>
+      <div class="section-label">Retrain model</div>
+      <div class="retrain-panel">
+        <div class="retrain-count" id="retrain-count">0</div>
+        <div class="retrain-count-label">files uploaded</div>
+        <h3>Fine-tune the model</h3>
+        <p>Once you've uploaded new audio files, click below to retrain the model on the new data. This preserves existing knowledge while learning from new examples.</p>
+        <div class="progress-bar" id="retrain-progress">
+          <div class="progress-fill" id="retrain-progress-fill"></div>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="triggerRetrain()" id="retrain-btn">
+          Retrain model
+        </button>
+        <div class="spinner" id="retrain-spinner" style="margin-top:12px;"></div>
+        <div id="retrain-result" style="margin-top:16px;font-size:13px;color:var(--text2);display:none;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── ABOUT ── -->
+<div id="about" class="page">
+  <div class="page-title">About CheckUp</div>
+  <div class="page-sub">Workplace mental health detection from voice</div>
+
+  <div class="about-grid">
+    <div>
+      <div class="card" style="margin-bottom:12px;">
+        <div class="section-label">Project overview</div>
+        <p class="about-text">CheckUp is an end-to-end machine learning pipeline that analyses voice recordings to detect workplace mental health states — calm, stressed, or distressed — using deep learning on audio features.</p>
+        <p class="about-text">Built as an extension of prior mental health prediction research, this project moves from tabular survey data to real audio signals, making the detection more immediate and applicable in workplace settings.</p>
+        <div class="tag-row">
+          <span class="tag">Python</span>
+          <span class="tag">TensorFlow</span>
+          <span class="tag">FastAPI</span>
+          <span class="tag">Librosa</span>
+          <span class="tag">Docker</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-label">How it works</div>
+        <p class="about-text">Each audio file is converted into a 40×174 MFCC (Mel Frequency Cepstral Coefficient) matrix — a 2D fingerprint of the voice's frequency patterns over time. A 3-block CNN then classifies these patterns into one of 3 workplace states.</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom:12px;">
+        <div class="section-label">Dataset — CREMA-D</div>
+        <p class="about-text">The CREMA-D dataset contains 7,442 audio files from 91 actors expressing 6 emotions. After data augmentation (noise, pitch shift, time stretch), the training set grew to 29,768 samples.</p>
+        <div class="metrics-row" style="grid-template-columns:1fr 1fr;margin-top:12px;margin-bottom:0;">
+          <div class="metric-card">
+            <div class="metric-label">ORIGINAL</div>
+            <div class="metric-val" style="font-size:20px;">7,442</div>
+            <div class="metric-sub">audio files</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">AUGMENTED</div>
+            <div class="metric-val green" style="font-size:20px;">29,768</div>
+            <div class="metric-sub">training samples</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-label">Model architecture</div>
+        <p class="about-text">3-block CNN with BatchNormalization and Dropout regularization. Trained for 80 epochs with EarlyStopping and ReduceLROnPlateau callbacks.</p>
+        <div class="tag-row">
+          <span class="tag">Conv2D × 3</span>
+          <span class="tag">BatchNorm</span>
+          <span class="tag">Dropout</span>
+          <span class="tag">3.5M params</span>
+          <span class="tag">80 epochs</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+let selectedPredictFile = null;
+let retrainFiles = [];
+let uploadedCount = 0;
+
+// ── Navigation ──
+function showPage(id, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  el.classList.add('active');
+}
+
+// ── Toast ──
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast show ${type}`;
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ── Health check ──
+async function checkHealth() {
+  try {
+    const res = await fetch(`${API}/health`);
+    const data = await res.json();
+    document.getElementById('status-text').textContent = 'model online';
+    document.getElementById('uptime-display').textContent = `uptime ${data.uptime_human}`;
+  } catch {
+    document.getElementById('status-text').textContent = 'offline';
+    document.getElementById('uptime-display').textContent = 'api unreachable';
+  }
+}
+
+// ── Load metrics ──
+async function loadMetrics() {
+  try {
+    const res = await fetch(`${API}/metrics`);
+    const d = await res.json();
+    document.getElementById('m-accuracy').textContent = (d.accuracy * 100).toFixed(1) + '%';
+    document.getElementById('m-roc').textContent = d.roc_auc.toFixed(3);
+    document.getElementById('m-f1').textContent = d.f1_score.toFixed(3);
+    document.getElementById('m-samples').textContent = d.augmented_samples.toLocaleString();
+  } catch { }
+}
+
+// ── Predict ──
+function handleFileSelect(input) {
+  if (input.files[0]) setFile(input.files[0]);
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropzone').classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+}
+
+function setFile(file) {
+  if (!file.name.endsWith('.wav')) { showToast('Only .wav files supported', 'error'); return; }
+  selectedPredictFile = file;
+  document.getElementById('drop-title').textContent = file.name;
+  document.getElementById('drop-sub').textContent = (file.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('predict-btn').disabled = false;
+}
+
+async function runPrediction() {
+  if (!selectedPredictFile) return;
+  const btn = document.getElementById('predict-btn');
+  const spinner = document.getElementById('predict-spinner');
+  btn.disabled = true;
+  spinner.style.display = 'block';
+
+  const form = new FormData();
+  form.append('file', selectedPredictFile);
+
+  try {
+    const res = await fetch(`${API}/predict`, { method: 'POST', body: form });
+    const data = await res.json();
+
+    if (!res.ok) { showToast(data.detail || 'Prediction failed', 'error'); return; }
+
+    document.getElementById('result-empty').style.display = 'none';
+    document.getElementById('result-content').style.display = 'block';
+
+    const badge = document.getElementById('pred-badge');
+    badge.textContent = data.prediction.charAt(0).toUpperCase() + data.prediction.slice(1);
+    badge.className = `prediction-badge badge-${data.prediction}`;
+
+    const probs = data.probabilities;
+    ['stressed', 'calm', 'distressed'].forEach(cls => {
+      const pct = probs[cls] || 0;
+      document.getElementById(`pct-${cls}`).textContent = pct.toFixed(1) + '%';
+      document.getElementById(`bar-${cls}`).style.width = pct + '%';
+    });
+
+    document.getElementById('result-message').textContent = data.message;
+    showToast('Prediction complete!');
+  } catch (e) {
+    showToast('Could not connect to API', 'error');
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+  }
+}
+
+// ── Retrain ──
+function handleRetrainFiles(input) {
+  addFiles(Array.from(input.files));
+}
+
+function handleRetrainDrop(e) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  addFiles(Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.wav')));
+}
+
+function addFiles(files) {
+  files.forEach(f => {
+    if (f.name.endsWith('.wav') && !retrainFiles.find(x => x.name === f.name)) {
+      retrainFiles.push(f);
+    }
+  });
+  renderFileList();
+  document.getElementById('upload-btn').disabled = retrainFiles.length === 0;
+}
+
+function removeFile(idx) {
+  retrainFiles.splice(idx, 1);
+  renderFileList();
+  document.getElementById('upload-btn').disabled = retrainFiles.length === 0;
+}
+
+function renderFileList() {
+  const list = document.getElementById('file-list');
+  list.innerHTML = retrainFiles.map((f, i) => `
+    <div class="file-item">
+      <span class="file-badge">wav</span>
+      <span class="file-name">${f.name}</span>
+      <span class="file-remove" onclick="removeFile(${i})">×</span>
+    </div>
+  `).join('');
+}
+
+async function uploadFiles() {
+  if (retrainFiles.length === 0) return;
+  const btn = document.getElementById('upload-btn');
+  const spinner = document.getElementById('upload-spinner');
+  btn.disabled = true;
+  spinner.style.display = 'block';
+
+  const form = new FormData();
+  retrainFiles.forEach(f => form.append('files', f));
+
+  try {
+    const res = await fetch(`${API}/upload`, { method: 'POST', body: form });
+    const data = await res.json();
+    uploadedCount = data.total_uploaded;
+    document.getElementById('retrain-count').textContent = uploadedCount;
+    showToast(`${uploadedCount} files uploaded!`);
+    retrainFiles = [];
+    renderFileList();
+  } catch {
+    showToast('Upload failed', 'error');
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+  }
+}
+
+async function triggerRetrain() {
+  const btn = document.getElementById('retrain-btn');
+  const spinner = document.getElementById('retrain-spinner');
+  const progress = document.getElementById('retrain-progress');
+  const fill = document.getElementById('retrain-progress-fill');
+  const result = document.getElementById('retrain-result');
+
+  btn.disabled = true;
+  spinner.style.display = 'block';
+  progress.style.display = 'block';
+  result.style.display = 'none';
+
+  let w = 0;
+  const interval = setInterval(() => {
+    w = Math.min(w + 8, 90);
+    fill.style.width = w + '%';
+  }, 400);
+
+  try {
+    const res = await fetch(`${API}/retrain`, { method: 'POST' });
+    const data = await res.json();
+    clearInterval(interval);
+    fill.style.width = '100%';
+
+    if (!res.ok) {
+      showToast(data.detail || 'Retraining failed', 'error');
+    } else {
+      result.style.display = 'block';
+      result.innerHTML = `Retraining complete — ${data.files_used} files, ${data.epochs} epochs. Final accuracy: <strong style="color:var(--green)">${(data.final_accuracy * 100).toFixed(1)}%</strong>`;
+      showToast('Model retrained successfully!');
+    }
+  } catch {
+    clearInterval(interval);
+    showToast('Could not connect to API', 'error');
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+    setTimeout(() => { progress.style.display = 'none'; fill.style.width = '0%'; }, 2000);
+  }
+}
+
+// ── Init ──
+checkHealth();
+loadMetrics();
+setInterval(checkHealth, 30000);
+</script>
+</body>
+</html>

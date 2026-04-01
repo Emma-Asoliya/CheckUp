@@ -1,8 +1,8 @@
 """
 main_docker.py — CheckUp FastAPI Backend
 ==========================================
-Uses tensorflow-cpu with the original .h5 model.
-Railway has enough RAM to load the full model.
+Uses tensorflow-cpu with the .h5 model for Railway deployment.
+Railway has sufficient RAM (8GB free trial) to load the full model.
 
 Endpoints:
   GET  /         — serves index.html (the frontend UI)
@@ -23,10 +23,6 @@ import librosa
 import io
 import os
 from datetime import datetime
-
-import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from retrain import run_retraining
 
 # ── App Setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -52,10 +48,11 @@ FRONTEND_DIR = os.path.join(BASE_DIR, 'frontend')
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ── Serve Frontend ────────────────────────────────────────────────────────────
+# Serves index.html when user visits the root URL
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
-# ── Load Model ────────────────────────────────────────────────────────────────
-# Loaded once at startup and reused for every prediction request
+# ── Load Model & Scaler (once at startup) ─────────────────────────────────────
+# Loading on every request would be ~3s per call — we load once and reuse
 print("Loading model...")
 model = tf.keras.models.load_model(
     os.path.join(MODELS_DIR, 'checkup_model.h5')
@@ -115,6 +112,7 @@ def health_check():
 async def predict(file: UploadFile = File(...)):
     """
     Accepts a single .wav file and returns a workplace mental health prediction.
+    Pipeline mirrors notebook Cells 6-7.
     """
     if not file.filename.endswith('.wav'):
         raise HTTPException(
@@ -124,13 +122,13 @@ async def predict(file: UploadFile = File(...)):
 
     try:
         audio_bytes = await file.read()
-
-        # Extract and scale MFCC features
         mfcc        = extract_mfcc(audio_bytes)
+
+        # Scale using original training scaler
         mfcc_flat   = mfcc.reshape(1, -1)
         mfcc_scaled = ((mfcc_flat - mean) / std).reshape(1, 40, 174, 1)
 
-        # Run prediction
+        # Run inference
         prediction      = model.predict(mfcc_scaled, verbose=0)
         predicted_class = np.argmax(prediction[0])
         confidence      = float(prediction[0][predicted_class])
@@ -189,7 +187,8 @@ async def upload_files(files: list[UploadFile] = File(...)):
 @app.post("/retrain")
 async def retrain_model():
     """
-    Triggers fine-tuning of checkup_model.h5 on files in data/uploads/.
+    Triggers fine-tuning on uploaded files using retrain.py.
+    Reloads the global model after retraining completes.
     """
     global model, _retraining_in_progress
 
@@ -202,6 +201,9 @@ async def retrain_model():
     _retraining_in_progress = True
 
     try:
+        import sys
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from retrain import run_retraining
         result = run_retraining()
 
         # Reload updated weights immediately

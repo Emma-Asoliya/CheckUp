@@ -1,10 +1,13 @@
 """
-main.py — CheckUp FastAPI Backend
-===================================
+main_docker.py — CheckUp FastAPI Backend (TFLite version)
+==========================================================
+Uses TFLite instead of full TensorFlow to run on Render's free tier.
+TFLite model is 3.4MB vs 40.5MB — fits easily in 512MB RAM.
+
 Endpoints:
-  GET  /         — root health ping
-  GET  /health   — uptime + model status (used by dashboard)
-  GET  /metrics  — evaluation metrics (used by dashboard)
+  GET  /         — serves index.html (the frontend UI)
+  GET  /health   — uptime + model status
+  GET  /metrics  — evaluation metrics
   POST /predict  — single .wav file -> mental health prediction
   POST /upload   — multiple .wav files -> saved to data/uploads/
   POST /retrain  — triggers fine-tuning on uploaded files
@@ -12,17 +15,24 @@ Endpoints:
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import tensorflow as tf
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import numpy as np
 import librosa
 import io
 import os
 from datetime import datetime
 
-# Import the retraining logic from retrain.py in the same src/ directory
-import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from retrain import run_retraining
+# ── TFLite Runtime ────────────────────────────────────────────────────────────
+# Try tflite-runtime first (lightweight, for deployment).
+# Fall back to tensorflow.lite if running locally with full TensorFlow installed.
+try:
+    import tflite_runtime.interpreter as tflite
+    print("Using tflite-runtime")
+except ImportError:
+    import tensorflow as tf
+    tflite = tf.lite
+    print("Using tensorflow.lite (fallback)")
 
 # ── App Setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -31,7 +41,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS — allows the frontend (index.html from any origin) to call this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,29 +50,43 @@ app.add_middleware(
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODELS_DIR  = os.path.join(BASE_DIR, 'models')
-DATA_DIR    = os.path.join(BASE_DIR, 'data', 'uploads')
+BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR   = os.path.join(BASE_DIR, 'models')
+DATA_DIR     = os.path.join(BASE_DIR, 'data', 'uploads')
+FRONTEND_DIR = os.path.join(BASE_DIR, 'frontend')
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# ── Load Model & Scaler (once at startup) ─────────────────────────────────────
-# Loading on every request would be ~3s per call — we load once and reuse.
-# After retraining, the global `model` variable is reloaded in /retrain.
-print("Loading model...")
-model = tf.keras.models.load_model(os.path.join(MODELS_DIR, 'checkup_model.h5'))
-mean  = np.load(os.path.join(MODELS_DIR, 'scaler_mean.npy'))
-std   = np.load(os.path.join(MODELS_DIR, 'scaler_std.npy'))
+# ── Serve Frontend ────────────────────────────────────────────────────────────
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+# ── Load TFLite Model ─────────────────────────────────────────────────────────
+# TFLite uses an Interpreter instead of model.predict()
+# We load it once at startup and reuse it for every prediction request
+print("Loading TFLite model...")
+interpreter = tflite.Interpreter(
+    model_path=os.path.join(MODELS_DIR, 'checkup_model.tflite')
+)
+interpreter.allocate_tensors()
+
+# Get input and output tensor details
+# These tell us the exact shape and index to use when running inference
+input_details  = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+print(f"Input shape:  {input_details[0]['shape']}")   # should be (1, 40, 174, 1)
+print(f"Output shape: {output_details[0]['shape']}")  # should be (1, 3)
+
+# Load scaler and label classes saved from the original training run
+mean          = np.load(os.path.join(MODELS_DIR, 'scaler_mean.npy'))
+std           = np.load(os.path.join(MODELS_DIR, 'scaler_std.npy'))
 label_classes = np.load(
     os.path.join(MODELS_DIR, 'label_classes.npy'),
     allow_pickle=True
 )
 print(f"Model loaded! Classes: {label_classes}")
 
-# Track server start time for uptime calculation in /health
 START_TIME = datetime.now()
-
-# Lock to prevent two simultaneous retrains from corrupting the model file
 _retraining_in_progress = False
 
 
@@ -71,11 +94,7 @@ _retraining_in_progress = False
 def extract_mfcc(audio_bytes, n_mfcc=40, max_len=174):
     """
     Converts raw .wav bytes to a normalised MFCC matrix.
-
-    Matches extract_mfcc() in notebook Cell 6 exactly:
-      - sr=22050, n_mfcc=40, max_len=174
-      - librosa.util.normalize applied
-      - zero-padded or truncated to max_len frames
+    Identical to the notebook Cell 6 implementation.
     """
     audio, sr = librosa.load(io.BytesIO(audio_bytes), sr=22050)
     mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc)
@@ -87,34 +106,48 @@ def extract_mfcc(audio_bytes, n_mfcc=40, max_len=174):
     return mfcc
 
 
+def run_tflite_inference(mfcc_scaled):
+    """
+    Runs inference using the TFLite interpreter.
+
+    Unlike model.predict(), TFLite requires:
+      1. Setting the input tensor manually
+      2. Calling invoke() to run the model
+      3. Reading the output tensor manually
+
+    Input must be float32 — TFLite is strict about dtypes.
+    """
+    # Set the input tensor — must be float32
+    interpreter.set_tensor(
+        input_details[0]['index'],
+        mfcc_scaled.astype(np.float32)
+    )
+
+    # Run inference
+    interpreter.invoke()
+
+    # Read the output tensor — shape (1, 3) softmax probabilities
+    output = interpreter.get_tensor(output_details[0]['index'])
+    return output
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
-def root():
-    """Root endpoint — confirms the API is running."""
-    return {
-        "message": "CheckUp API is running!",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+def serve_frontend():
+    """Serves index.html at the root URL."""
+    return FileResponse(os.path.join(FRONTEND_DIR, 'index.html'))
 
 
 @app.get("/health")
 def health_check():
-    """
-    Returns model uptime and status.
-    Called by the frontend every 30s to update the nav status pill
-    and the Dashboard uptime badge.
-
-    status is "retraining" while a retrain job is running,
-    "healthy" otherwise.
-    """
+    """Returns model uptime and status."""
     uptime = datetime.now() - START_TIME
     return {
         "status":         "retraining" if _retraining_in_progress else "healthy",
         "uptime_seconds": uptime.seconds,
         "uptime_human":   str(uptime).split('.')[0],
-        "model_loaded":   model is not None,
+        "model_loaded":   interpreter is not None,
         "classes":        label_classes.tolist(),
         "model_accuracy": 0.8055,
         "roc_auc":        0.9254
@@ -125,16 +158,7 @@ def health_check():
 async def predict(file: UploadFile = File(...)):
     """
     Accepts a single .wav file and returns a workplace mental health prediction.
-
-    Pipeline (mirrors notebook Cells 6-7):
-      1. Read uploaded bytes
-      2. extract_mfcc() -> (40, 174) matrix
-      3. Flatten, apply saved scaler, reshape to (1, 40, 174, 1)
-      4. model.predict() -> softmax probabilities
-      5. argmax -> label string
-
-    Returns prediction, confidence %, human-readable message,
-    and probabilities for all three classes.
+    Uses TFLite interpreter instead of model.predict() for low memory usage.
     """
     if not file.filename.endswith('.wav'):
         raise HTTPException(
@@ -144,13 +168,14 @@ async def predict(file: UploadFile = File(...)):
 
     try:
         audio_bytes = await file.read()
-        mfcc        = extract_mfcc(audio_bytes)
 
-        # Scale using original training scaler (notebook Cell 10)
+        # Extract and scale MFCC features
+        mfcc        = extract_mfcc(audio_bytes)
         mfcc_flat   = mfcc.reshape(1, -1)
         mfcc_scaled = ((mfcc_flat - mean) / std).reshape(1, 40, 174, 1)
 
-        prediction      = model.predict(mfcc_scaled, verbose=0)
+        # Run TFLite inference
+        prediction      = run_tflite_inference(mfcc_scaled)
         predicted_class = np.argmax(prediction[0])
         confidence      = float(prediction[0][predicted_class])
         label           = label_classes[predicted_class]
@@ -179,9 +204,6 @@ async def predict(file: UploadFile = File(...)):
 async def upload_files(files: list[UploadFile] = File(...)):
     """
     Accepts multiple .wav files and saves them to data/uploads/.
-
-    Files are stored server-side so POST /retrain can find them.
-    Non-.wav files are silently skipped and reported in 'failed'.
     """
     saved  = []
     failed = []
@@ -211,76 +233,46 @@ async def upload_files(files: list[UploadFile] = File(...)):
 @app.post("/retrain")
 async def retrain_model():
     """
-    Triggers fine-tuning of checkup_model.h5 on files in data/uploads/.
-
-    Delegates all work to run_retraining() in retrain.py:
-      1. Scan data/uploads/ for .wav files
-      2. Parse CREMA-D filenames to derive labels
-      3. Extract MFCCs with 4x augmentation
-      4. Load checkup_model.h5 as pre-trained base
-      5. Freeze blocks 1+2, fine-tune block 3 + dense layers
-      6. Save updated model to checkup_model.h5
-
-    After retrain.py finishes, the global `model` variable is reloaded
-    so subsequent /predict calls use the new weights immediately —
-    no server restart needed.
-
-    Returns files_used, epochs trained, and final validation accuracy.
-    Raises 409 if a retrain is already running.
-    Raises 400 for expected errors (no files, bad format).
-    Raises 500 for unexpected errors.
+    Triggers fine-tuning on uploaded files.
+    Note: retraining still uses full TensorFlow (runs in the notebook/locally).
+    After retraining, convert the new .h5 to .tflite and redeploy.
     """
-    global model, _retraining_in_progress
+    global _retraining_in_progress
 
     if _retraining_in_progress:
         raise HTTPException(
             status_code=409,
-            detail="A retraining job is already running. Please wait for it to finish."
+            detail="A retraining job is already running. Please wait."
         )
 
+    # Import retrain here to avoid loading TF at startup
+    # (retrain.py uses full TensorFlow, not TFLite)
     _retraining_in_progress = True
 
     try:
-        # All retraining logic lives in retrain.py
+        import sys
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from retrain import run_retraining
         result = run_retraining()
 
-        # Reload updated weights into the global model variable
-        # so /predict immediately uses the fine-tuned model
-        model = tf.keras.models.load_model(
-            os.path.join(MODELS_DIR, 'checkup_model.h5')
-        )
-        print("Global model reloaded with fine-tuned weights.")
-
         return {
-            "message":        "Retraining complete. Model updated successfully.",
+            "message":        "Retraining complete. Redeploy to use updated model.",
             "files_used":     result["files_used"],
             "epochs":         result["epochs"],
             "final_accuracy": result["final_accuracy"]
         }
 
     except RuntimeError as e:
-        # Expected failures: no files, bad filenames, missing model file
         raise HTTPException(status_code=400, detail=str(e))
-
     except Exception as e:
-        # Unexpected failures: TF crash, disk full, etc.
         raise HTTPException(status_code=500, detail=f"Retraining failed: {str(e)}")
-
     finally:
-        # Always release the lock, even if an exception was raised
         _retraining_in_progress = False
 
 
 @app.get("/metrics")
 def get_metrics():
-    """
-    Returns model evaluation metrics for the Dashboard.
-
-    Values are from notebook Cell 14 (sklearn classification_report
-    and roc_auc_score on the held-out test set).
-    Hardcoded because they represent a fixed evaluation snapshot —
-    they update when the model is retrained and re-evaluated in the notebook.
-    """
+    """Returns model evaluation metrics for the Dashboard."""
     return {
         "accuracy":          0.8055,
         "precision":         0.8119,

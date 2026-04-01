@@ -2,7 +2,6 @@ data/
 *.wav
 *.zip
 
-*.h5
 *.pkl
 
 __pycache__/

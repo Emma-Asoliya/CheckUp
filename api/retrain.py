@@ -278,7 +278,6 @@ def run_retraining():
     print(f"  Validation samples:{len(X_val)}")
 
     # ── Step 4: Load pre-trained model and configure for fine-tuning ─────────
-    # Satisfies the rubric: "The student uses a custom model as a pre-trained model"
     print(f"\n[4/5] Loading pre-trained model and configuring for fine-tuning...")
 
     model_path = os.path.join(MODELS_DIR, 'checkup_model.h5')
